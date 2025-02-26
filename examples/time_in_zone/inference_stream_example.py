@@ -10,6 +10,11 @@ from utils.timers import ClockBasedTimer
 
 import supervision as sv
 
+def fps_monitor_call(self) -> float:
+    return self.fps
+
+sv.FPSMonitor.__call__ = fps_monitor_call
+
 COLORS = sv.ColorPalette.from_hex(["#E6194B", "#3CB44B", "#FFE119", "#3C76D1"])
 COLOR_ANNOTATOR = sv.ColorAnnotator(color=COLORS)
 LABEL_ANNOTATOR = sv.LabelAnnotator(
