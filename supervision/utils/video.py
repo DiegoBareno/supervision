@@ -57,6 +57,7 @@ class VideoInfo:
     @property
     def resolution_wh(self) -> Tuple[int, int]:
         return self.width, self.height
+    
 
 
 class VideoSink:
@@ -259,25 +260,16 @@ class FPSMonitor:
 
     @property
     def fps(self) -> float:
-        """
-        Computes and returns the average FPS based on the stored time stamps.
-
-        Returns:
-            float: The average FPS. Returns 0.0 if no time stamps are stored.
-        """
         if not self.all_timestamps:
             return 0.0
         taken_time = self.all_timestamps[-1] - self.all_timestamps[0]
-        return (len(self.all_timestamps)) / taken_time if taken_time != 0 else 0.0
+        return len(self.all_timestamps) / taken_time if taken_time != 0 else 0.0
 
     def tick(self) -> None:
-        """
-        Adds a new time stamp to the deque for FPS calculation.
-        """
         self.all_timestamps.append(time.monotonic())
 
     def reset(self) -> None:
-        """
-        Clears all the time stamps from the deque.
-        """
         self.all_timestamps.clear()
+
+    def __call__(self) -> float:
+        return self.fps
