@@ -1,5 +1,6 @@
 import argparse
 from typing import List
+import csv
 
 import cv2
 import numpy as np
@@ -14,7 +15,6 @@ COLOR_ANNOTATOR = sv.ColorAnnotator(color=COLORS)
 LABEL_ANNOTATOR = sv.LabelAnnotator(
     color=COLORS, text_color=sv.Color.from_hex("#000000")
 )
-
 
 def main(
     source_video_path: str,
@@ -37,9 +37,18 @@ def main(
         )
         for polygon in polygons
     ]
+    # Conservamos el timer para dibujar, aunque para el log usaremos nuestro propio método
     timers = [FPSBasedTimer(video_info.fps) for _ in zones]
 
+    # Diccionarios para guardar detecciones activas por zona
+    # Cada elemento de active_intervals es un diccionario: { tracker_id: {"start": tiempo_inicio, "last_seen": tiempo_último} }
+    active_intervals = [dict() for _ in zones]
+    # Lista para intervalos completados: cada entrada es un diccionario con tracker_id, zona, inicio, fin y duración
+    completed_intervals = []
+
+    frame_count = 0  # Para calcular el tiempo actual en segundos
     for frame in frames_generator:
+        current_time = frame_count / video_info.fps  # Tiempo en segundos
         results = model.infer(frame, confidence=confidence, iou_threshold=iou)[0]
         detections = sv.Detections.from_inference(results)
         detections = detections[find_in_list(detections.class_id, classes)]
@@ -48,14 +57,40 @@ def main(
         annotated_frame = frame.copy()
 
         for idx, zone in enumerate(zones):
+            # Dibujar la zona
             annotated_frame = sv.draw_polygon(
                 scene=annotated_frame, polygon=zone.polygon, color=COLORS.by_idx(idx)
             )
 
+            # Obtener detecciones dentro de la zona
             detections_in_zone = detections[zone.trigger(detections)]
-            time_in_zone = timers[idx].tick(detections_in_zone)
+            time_in_zone = timers[idx].tick(detections_in_zone)  # Se sigue usando para anotación
             custom_color_lookup = np.full(detections_in_zone.class_id.shape, idx)
 
+            # Actualizamos o iniciamos el registro de detección para cada objeto en la zona
+            # Primero, extraemos los tracker_id detectados en el frame actual
+            current_ids = list(detections_in_zone.tracker_id)
+
+            # Revisamos aquellos que estaban activos pero que ya no se detectan en este frame
+            for tracker_id in list(active_intervals[idx].keys()):
+                if tracker_id not in current_ids:
+                    record = active_intervals[idx].pop(tracker_id)
+                    completed_intervals.append({
+                        "tracker_id": tracker_id,
+                        "zone": idx,
+                        "start": record["start"],
+                        "end": record["last_seen"],
+                        "duration": record["last_seen"] - record["start"],
+                    })
+
+            # Para cada detección actual, iniciamos o actualizamos su registro
+            for tracker_id in current_ids:
+                if tracker_id in active_intervals[idx]:
+                    active_intervals[idx][tracker_id]["last_seen"] = current_time
+                else:
+                    active_intervals[idx][tracker_id] = {"start": current_time, "last_seen": current_time}
+
+            # Anotaciones de color y etiqueta en la imagen (se muestra el tiempo acumulado)
             annotated_frame = COLOR_ANNOTATOR.annotate(
                 scene=annotated_frame,
                 detections=detections_in_zone,
@@ -75,8 +110,30 @@ def main(
         cv2.imshow("Processed Video", annotated_frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
+
+        frame_count += 1
+
+    # Al finalizar el video, finalizamos los intervalos activos restantes
+    for idx in range(len(zones)):
+        for tracker_id, record in active_intervals[idx].items():
+            completed_intervals.append({
+                "tracker_id": tracker_id,
+                "zone": idx,
+                "start": record["start"],
+                "end": record["last_seen"],
+                "duration": record["last_seen"] - record["start"],
+            })
+
     cv2.destroyAllWindows()
 
+    # Opcional: almacenar los registros en un archivo CSV
+    with open("detection_logs.csv", "w", newline="") as csvfile:
+        fieldnames = ["tracker_id", "zone", "start", "end", "duration"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in completed_intervals:
+            writer.writerow(row)
+    print("Logs de detección guardados en detection_logs.csv")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
